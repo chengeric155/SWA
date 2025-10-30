@@ -78,6 +78,7 @@ python train.py --dataset CIFAR100 --model wide_resnet50_2 \
 ### Other Parameters
 - `--num_workers`: Number of data loading workers (default: `4`)
 - `--seed`: Random seed (default: `42`)
+- `--save_model`: Saves the model as a `.pth` file (flag)
 
 ## Output Files
 
