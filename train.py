@@ -40,6 +40,8 @@ def parse_args():
                         help='Model architecture from torchvision.models')
     parser.add_argument('--optimizer', type=str, default='SGD',
                         help='Optimizer from torch.optim')
+    parser.add_argument('--image_size', type=int, default=None,
+                        help='Image size (auto-detected for ViT models, default 32 for CNNs)')
     
     # Training parameters
     parser.add_argument('--epochs', type=int, default=200,
@@ -91,18 +93,43 @@ def set_seed(seed):
 
 def get_dataset(args):
     """Load CIFAR10 or CIFAR100 dataset"""
-    # Data augmentation for training
-    transform_train = transforms.Compose([
-        transforms.RandomCrop(32, padding=4),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-    ])
+    # Determine image size - auto-detect for ViT or use specified/default
+    if args.image_size is not None:
+        img_size = args.image_size
+    else:
+        # Auto-detect: ViT needs 224x224, CNNs use 32x32
+        img_size = 224 if 'vit' in args.model.lower() else 32
     
-    transform_test = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-    ])
+    # Data augmentation for training
+    if img_size != 32:
+        # For larger images (e.g., ViT): resize and adjust padding
+        padding = int(img_size * 0.125)  # Proportional padding (4/32 = 0.125)
+        transform_train = transforms.Compose([
+            transforms.Resize(img_size),
+            transforms.RandomCrop(img_size, padding=padding),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
+        
+        transform_test = transforms.Compose([
+            transforms.Resize(img_size),
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
+    else:
+        # For 32x32 images (standard CIFAR size)
+        transform_train = transforms.Compose([
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
+        
+        transform_test = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
     
     if args.dataset == 'CIFAR10':
         train_dataset = torchvision.datasets.CIFAR10(
@@ -277,6 +304,9 @@ def main():
     print(f'Initial LR: {args.lr_init}')
     print(f'Weight Decay: {args.wd}')
     print(f'Batch Size: {args.batch_size}')
+    # Detect image size used
+    img_size = args.image_size if args.image_size is not None else (224 if 'vit' in args.model.lower() else 32)
+    print(f'Image Size: {img_size}x{img_size}')
     if args.use_swa:
         print(f'SWA: Enabled (starts at epoch {args.swa_start}, LR={args.swa_lr})')
     else:
