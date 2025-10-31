@@ -4,6 +4,7 @@ datasets/
 
 # Results and checkpoints
 results/
+wandb/
 checkpoints/
 *.pth
 *.pt

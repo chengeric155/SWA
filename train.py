@@ -15,6 +15,13 @@ from tqdm import tqdm
 from tabulate import tabulate
 import csv
 
+# Optional wandb import
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train CIFAR10/CIFAR100 with optional SWA')
@@ -45,7 +52,7 @@ def parse_args():
                         help='Weight decay')
     parser.add_argument('--momentum', type=float, default=0.9,
                         help='Momentum (for SGD)')
-    parser.add_argument('--eval_freq', type=int, default=10,
+    parser.add_argument('--eval_freq', type=int, default=5,
                         help='Frequency of test evaluation')
     
     # SWA parameters
@@ -63,6 +70,14 @@ def parse_args():
                         help='Random seed')
     parser.add_argument('--save_model', action='store_true',
                         help='Save model checkpoints')
+    
+    # Wandb parameters
+    parser.add_argument('--use_wandb', action='store_true',
+                        help='Use Weights & Biases for logging')
+    parser.add_argument('--wandb_project', type=str, default='cifar-swa',
+                        help='Wandb project name')
+    parser.add_argument('--wandb_entity', type=str, default=None,
+                        help='Wandb entity (username or team)')
     
     return parser.parse_args()
 
@@ -195,6 +210,24 @@ def main():
     args = parse_args()
     set_seed(args.seed)
     
+    # Initialize wandb if requested
+    if args.use_wandb:
+        if not WANDB_AVAILABLE:
+            print("Warning: wandb not installed. Install with: pip install wandb")
+            print("Continuing without wandb logging...")
+            args.use_wandb = False
+        else:
+            # Generate run name
+            swa_suffix = '_SWA' if args.use_swa else ''
+            run_name = f'{args.model}_{args.dataset}_{args.epochs}epochs{swa_suffix}'
+            
+            wandb.init(
+                project=args.wandb_project,
+                entity=args.wandb_entity,
+                name=run_name,
+                config=vars(args)
+            )
+    
     # Setup directories
     Path(args.data_dir).mkdir(parents=True, exist_ok=True)
     Path(args.results_dir).mkdir(parents=True, exist_ok=True)
@@ -311,6 +344,30 @@ def main():
         result_row['time'] = f'{epoch_time:.2f}s'
         results.append(result_row)
         
+        # Log to wandb if enabled
+        if args.use_wandb:
+            log_dict = {
+                'epoch': epoch,
+                'train/loss': train_loss,
+                'train/acc': train_acc,
+                'lr': optimizer.param_groups[0]['lr'],
+                'time/epoch': epoch_time
+            }
+            
+            if args.use_swa and epoch >= args.swa_start:
+                log_dict['swa_train/loss'] = swa_loss
+                log_dict['swa_train/acc'] = swa_acc
+            
+            if epoch == 1 or epoch == args.epochs or epoch % args.eval_freq == 0:
+                log_dict['test/loss'] = test_loss
+                log_dict['test/acc'] = test_acc
+                
+                if args.use_swa and epoch >= args.swa_start:
+                    log_dict['swa_test/loss'] = swa_test_loss
+                    log_dict['swa_test/acc'] = swa_test_acc
+            
+            wandb.log(log_dict, step=epoch)
+        
         # Print table - only show header every 40 epochs
         table = tabulate([result_row], headers='keys', tablefmt='simple', floatfmt='8.4f')
         if epoch % 40 == 1:  # Show header on first epoch and every 40 epochs
@@ -335,6 +392,13 @@ def main():
         # Final SWA evaluation
         swa_test_loss, swa_test_acc = evaluate(swa_model, test_loader, criterion, device)
         print(f'Final SWA Test Loss: {swa_test_loss:.4f}, Test Acc: {swa_test_acc:.2f}%')
+        
+        # Log final SWA results to wandb
+        if args.use_wandb:
+            wandb.log({
+                'swa_final/test_loss': swa_test_loss,
+                'swa_final/test_acc': swa_test_acc
+            })
         
         # Append final SWA results to CSV
         final_swa_row = {
@@ -369,8 +433,18 @@ def main():
             swa_model_file = os.path.join(args.results_dir, f'{base_filename}_swa_model.pth')
             torch.save(swa_model.state_dict(), swa_model_file)
             print(f'Saved SWA model to: {swa_model_file}')
+            
+        # Log model artifacts to wandb
+        if args.use_wandb:
+            wandb.save(model_file)
+            if args.use_swa:
+                wandb.save(swa_model_file)
     else:
         print('\nSkipping model saving (--save_model not specified)')
+    
+    # Finish wandb run
+    if args.use_wandb:
+        wandb.finish()
     
     print(f'\nTraining complete! Results saved to {args.results_dir}')
 
