@@ -52,7 +52,7 @@ def parse_args():
                         help='Weight decay')
     parser.add_argument('--momentum', type=float, default=0.9,
                         help='Momentum (for SGD)')
-    parser.add_argument('--eval_freq', type=int, default=5,
+    parser.add_argument('--eval_freq', type=int, default=10,
                         help='Frequency of test evaluation')
     
     # SWA parameters
@@ -217,9 +217,9 @@ def main():
             print("Continuing without wandb logging...")
             args.use_wandb = False
         else:
-            # Generate run name
+            # Generate run name with optimizer
             swa_suffix = '_SWA' if args.use_swa else ''
-            run_name = f'{args.model}_{args.dataset}_{args.epochs}epochs{swa_suffix}'
+            run_name = f'{args.model}_{args.dataset}_{args.optimizer}_{args.epochs}epochs{swa_suffix}'
             
             wandb.init(
                 project=args.wandb_project,
@@ -260,10 +260,10 @@ def main():
     
     criterion = nn.CrossEntropyLoss()
     
-    # Generate unique filenames with timestamp
+    # Generate unique filenames with timestamp and optimizer
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     swa_suffix = '_SWA' if args.use_swa else ''
-    base_filename = f'{args.model}_{args.dataset}_{args.epochs}epochs{swa_suffix}_{timestamp}'
+    base_filename = f'{args.model}_{args.dataset}_{args.optimizer}_{args.epochs}epochs{swa_suffix}_{timestamp}'
     log_file = os.path.join(args.results_dir, f'{base_filename}_training_log.csv')
     
     # Print training summary
