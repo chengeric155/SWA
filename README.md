@@ -6,7 +6,11 @@ by Pavel Izmailov, Dmitrii Podoprikhin, Timur Garipov, Dmitry Vetrov and Andrew 
 ## Requirements
 
 ```bash
+# Core requirements
 pip install torch torchvision tabulate tdqm
+
+# Optional: For Weights & Biases logging
+pip install wandb
 ```
 
 ## Usage
@@ -38,6 +42,17 @@ python train.py --dataset CIFAR10 --model resnet18 --epochs 200
 ```bash
 python train.py --dataset CIFAR10 --model resnet18 --epochs 200 \
     --use_swa --swa_start 160 --swa_lr 0.05
+```
+
+### Training with Weights & Biases Logging
+```bash
+# First time setup
+pip install wandb
+wandb login
+
+# Train with wandb logging
+python train.py --dataset CIFAR10 --model resnet18 --epochs 200 \
+    --use_wandb --use_swa --swa_start 160
 ```
 
 ### Training on CIFAR-100 with Custom Settings
@@ -74,6 +89,11 @@ python train.py --dataset CIFAR100 --model wide_resnet50_2 \
 - `--use_swa`: Enable Stochastic Weight Averaging (flag)
 - `--swa_start`: Epoch to start SWA (default: `160`)
 - `--swa_lr`: SWA learning rate (default: `0.05`)
+
+### Wandb Parameters
+- `--use_wandb`: Use wandb.ai for live logging (flag)
+- `--wandb_project`: Wandb project name (default: `'cifar-swa'`)
+- `--wandb_entity`: Wandb entity (username or team) (default: `None`)
 
 ### Other Parameters
 - `--num_workers`: Number of data loading workers (default: `4`)
