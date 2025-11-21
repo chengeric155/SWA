@@ -7,7 +7,7 @@ by Pavel Izmailov, Dmitrii Podoprikhin, Timur Garipov, Dmitry Vetrov and Andrew 
 
 ```bash
 # Core requirements
-pip install torch torchvision tabulate tdqm
+pip install torch torchvision pytorch_optimizer tabulate tdqm
 
 # Optional: For Weights & Biases logging
 pip install wandb
@@ -40,8 +40,14 @@ python train.py --dataset CIFAR10 --model resnet18 --epochs 200
 ### Training with SWA
 
 ```bash
-python train.py --dataset CIFAR10 --model resnet18 --epochs 200 \
+python train.py --dataset CIFAR10 --optimizer SGD --model resnet18 --epochs 200 \
     --use_swa --swa_start 160 --swa_lr 0.05
+```
+
+### Training with optimizers not in `torch.optim` + SWA
+```bash
+python train.py --alt_optimizer Lion --lr_init 0.0001 --wd 0 \
+    --epochs 200 --use_swa --swa_start 160 --swa_lr 0.00005
 ```
 
 ### Training with Weights & Biases Logging
@@ -76,6 +82,8 @@ python train.py --dataset CIFAR100 --model wide_resnet50_2 \
   - Examples: `resnet18`, `resnet50`, `vgg16`, `wide_resnet50_2`, `efficientnet_b0`
 - `--optimizer`: Optimizer from [`torch.optim`](https://docs.pytorch.org/docs/stable/optim.html#algorithms) (default: `SGD`)
   - Examples: `SGD`, `Adam`, `AdamW`, `RMSprop`
+- `--alt_optimizer`: Optimizer from [`pytorch_optimizer`](https://pytorch-optimizers.readthedocs.io/en/latest/optimizer/) (Overrides `--optimizer`) (default: `None`)
+  - Examples: `Lion`, `Muon`, `SOAP`
 
 ### Training Parameters
 - `--epochs`: Number of training epochs (default: `200`)

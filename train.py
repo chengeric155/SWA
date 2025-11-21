@@ -22,27 +22,36 @@ try:
 except ImportError:
     WANDB_AVAILABLE = False
 
+# Optional pytorch_optimizer import
+try:
+    import pytorch_optimizer as alt_optim
+    ALT_OPTIM_AVAILABLE = True
+except ImportError:
+    ALT_OPTIM_AVAILABLE = False
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train CIFAR10/CIFAR100 with optional SWA')
-    
+
     # Dataset parameters
-    parser.add_argument('--dataset', type=str, default='CIFAR10', 
+    parser.add_argument('--dataset', type=str, default='CIFAR10',
                         choices=['CIFAR10', 'CIFAR100'],
                         help='Dataset name')
     parser.add_argument('--data_dir', type=str, default='./data',
                         help='Directory for dataset')
     parser.add_argument('--results_dir', type=str, default='./results',
                         help='Directory for saving results and checkpoints')
-    
+
     # Model parameters
     parser.add_argument('--model', type=str, default='resnet18',
                         help='Model architecture from torchvision.models')
     parser.add_argument('--optimizer', type=str, default='SGD',
                         help='Optimizer from torch.optim')
+    parser.add_argument('--alt_optimizer', type=str, default=None,
+                        help='Optimizer from pytorch_optimizer (overrides --optimizer)')
     parser.add_argument('--image_size', type=int, default=None,
                         help='Image size (auto-detected for ViT models, default 32 for CNNs)')
-    
+
     # Training parameters
     parser.add_argument('--epochs', type=int, default=200,
                         help='Number of training epochs')
@@ -56,7 +65,7 @@ def parse_args():
                         help='Momentum (for SGD)')
     parser.add_argument('--eval_freq', type=int, default=10,
                         help='Frequency of test evaluation')
-    
+
     # SWA parameters
     parser.add_argument('--use_swa', action='store_true',
                         help='Use Stochastic Weight Averaging')
@@ -64,7 +73,7 @@ def parse_args():
                         help='Epoch to start SWA')
     parser.add_argument('--swa_lr', type=float, default=0.05,
                         help='SWA learning rate')
-    
+
     # Other parameters
     parser.add_argument('--num_workers', type=int, default=4,
                         help='Number of data loading workers')
@@ -72,7 +81,7 @@ def parse_args():
                         help='Random seed')
     parser.add_argument('--save_model', action='store_true',
                         help='Save model checkpoints')
-    
+
     # Wandb parameters
     parser.add_argument('--use_wandb', action='store_true',
                         help='Use Weights & Biases for logging')
@@ -80,7 +89,7 @@ def parse_args():
                         help='Wandb project name')
     parser.add_argument('--wandb_entity', type=str, default=None,
                         help='Wandb entity (username or team)')
-    
+
     return parser.parse_args()
 
 
@@ -99,7 +108,7 @@ def get_dataset(args):
     else:
         # Auto-detect: ViT needs 224x224, CNNs use 32x32
         img_size = 224 if 'vit' in args.model.lower() else 32
-    
+
     # Data augmentation for training
     if img_size != 32:
         # For larger images (e.g., ViT): resize and adjust padding
@@ -111,7 +120,7 @@ def get_dataset(args):
             transforms.ToTensor(),
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
-        
+
         transform_test = transforms.Compose([
             transforms.Resize(img_size),
             transforms.ToTensor(),
@@ -125,12 +134,12 @@ def get_dataset(args):
             transforms.ToTensor(),
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
-        
+
         transform_test = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
-    
+
     if args.dataset == 'CIFAR10':
         train_dataset = torchvision.datasets.CIFAR10(
             root=args.data_dir, train=True, download=True, transform=transform_train)
@@ -143,14 +152,14 @@ def get_dataset(args):
         test_dataset = torchvision.datasets.CIFAR100(
             root=args.data_dir, train=False, download=True, transform=transform_test)
         num_classes = 100
-    
+
     train_loader = DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=True,
         num_workers=args.num_workers, pin_memory=True)
     test_loader = DataLoader(
         test_dataset, batch_size=args.batch_size, shuffle=False,
         num_workers=args.num_workers, pin_memory=True)
-    
+
     return train_loader, test_loader, num_classes
 
 
@@ -161,27 +170,67 @@ def get_model(args, num_classes):
         model = model_fn(num_classes=num_classes)
     except AttributeError:
         raise ValueError(f"Model {args.model} not found in torchvision.models")
-    
+
     return model
 
 
 def get_optimizer(args, model):
-    """Initialize optimizer from torch.optim"""
-    try:
-        optimizer_class = getattr(optim, args.optimizer)
-    except AttributeError:
-        raise ValueError(f"Optimizer {args.optimizer} not found in torch.optim")
-    
-    # Create optimizer with appropriate parameters
-    if args.optimizer == 'SGD':
-        optimizer = optimizer_class(
-            model.parameters(), lr=args.lr_init, 
-            momentum=args.momentum, weight_decay=args.wd)
+    """Initialize optimizer from torch.optim or pytorch_optimizer"""
+    # Determine which optimizer to use and from which package
+    if args.alt_optimizer is not None:
+        # Use pytorch_optimizer
+        if not ALT_OPTIM_AVAILABLE:
+            raise ImportError(
+                "pytorch_optimizer is not installed. "
+                "Install with: pip install pytorch-optimizer"
+            )
+
+        optimizer_name = args.alt_optimizer
+        try:
+            optimizer_class = getattr(alt_optim, optimizer_name)
+        except AttributeError:
+            raise ValueError(
+                f"Optimizer {optimizer_name} not found in pytorch_optimizer. "
+                f"Available optimizers: {dir(alt_optim)}"
+            )
+
+        # Create optimizer - pytorch_optimizer optimizers typically accept lr and weight_decay
+        # Some may accept additional parameters
+        try:
+            optimizer = optimizer_class(
+                model.parameters(),
+                lr=args.lr_init,
+                weight_decay=args.wd
+            )
+        except TypeError:
+            # Fallback if optimizer doesn't accept weight_decay
+            optimizer = optimizer_class(
+                model.parameters(),
+                lr=args.lr_init
+            )
+
+        print(f"Using optimizer: {optimizer_name} from pytorch_optimizer")
+
     else:
-        optimizer = optimizer_class(
-            model.parameters(), lr=args.lr_init, weight_decay=args.wd)
-    
-    return optimizer
+        # Use torch.optim (original behavior)
+        optimizer_name = args.optimizer
+        try:
+            optimizer_class = getattr(optim, optimizer_name)
+        except AttributeError:
+            raise ValueError(f"Optimizer {optimizer_name} not found in torch.optim")
+
+        # Create optimizer with appropriate parameters
+        if optimizer_name == 'SGD':
+            optimizer = optimizer_class(
+                model.parameters(), lr=args.lr_init,
+                momentum=args.momentum, weight_decay=args.wd)
+        else:
+            optimizer = optimizer_class(
+                model.parameters(), lr=args.lr_init, weight_decay=args.wd)
+
+        print(f"Using optimizer: {optimizer_name} from torch.optim")
+
+    return optimizer, optimizer_name
 
 
 def train_epoch(model, train_loader, criterion, optimizer, device):
@@ -190,25 +239,25 @@ def train_epoch(model, train_loader, criterion, optimizer, device):
     total_loss = 0
     correct = 0
     total = 0
-    
+
     pbar = tqdm(train_loader, desc='Training', leave=False)
     for inputs, targets in pbar:
         inputs, targets = inputs.to(device), targets.to(device)
-        
+
         optimizer.zero_grad()
         outputs = model(inputs)
         loss = criterion(outputs, targets)
         loss.backward()
         optimizer.step()
-        
+
         total_loss += loss.item() * inputs.size(0)
         _, predicted = outputs.max(1)
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
-        
-        pbar.set_postfix({'loss': f'{loss.item():.3f}', 
-                         'acc': f'{100.*correct/total:.2f}%'})
-    
+
+        pbar.set_postfix({'loss': f'{loss.item():.3f}',
+                          'acc': f'{100.*correct/total:.2f}%'})
+
     return total_loss / total, 100. * correct / total
 
 
@@ -218,25 +267,63 @@ def evaluate(model, test_loader, criterion, device):
     total_loss = 0
     correct = 0
     total = 0
-    
+
     with torch.no_grad():
         for inputs, targets in test_loader:
             inputs, targets = inputs.to(device), targets.to(device)
             outputs = model(inputs)
             loss = criterion(outputs, targets)
-            
+
             total_loss += loss.item() * inputs.size(0)
             _, predicted = outputs.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
-    
+
     return total_loss / total, 100. * correct / total
 
 
 def main():
     args = parse_args()
     set_seed(args.seed)
-    
+
+    # Setup directories
+    Path(args.data_dir).mkdir(parents=True, exist_ok=True)
+    Path(args.results_dir).mkdir(parents=True, exist_ok=True)
+
+    # Setup device
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f'Using device: {device}')
+
+    # Load dataset
+    print(f'Loading {args.dataset}...')
+    train_loader, test_loader, num_classes = get_dataset(args)
+
+    # Initialize model
+    print(f'Initializing {args.model}...')
+    model = get_model(args, num_classes).to(device)
+
+    # Initialize optimizer (returns optimizer and its name)
+    optimizer, optimizer_name = get_optimizer(args, model)
+
+    # Learning rate scheduler (cosine annealing)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+
+    # Initialize SWA if requested
+    swa_model = None
+    swa_scheduler = None
+    if args.use_swa:
+        swa_model = AveragedModel(model)
+        swa_scheduler = SWALR(optimizer, swa_lr=args.swa_lr)
+        print(f'SWA will start at epoch {args.swa_start}')
+
+    criterion = nn.CrossEntropyLoss()
+
+    # Generate unique filenames with timestamp and optimizer name
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    swa_suffix = '_SWA' if args.use_swa else ''
+    base_filename = f'{args.model}_{args.dataset}_{optimizer_name}_{args.epochs}epochs{swa_suffix}_{timestamp}'
+    log_file = os.path.join(args.results_dir, f'{base_filename}_training_log.csv')
+
     # Initialize wandb if requested
     if args.use_wandb:
         if not WANDB_AVAILABLE:
@@ -245,61 +332,22 @@ def main():
             args.use_wandb = False
         else:
             # Generate run name with optimizer
-            swa_suffix = '_SWA' if args.use_swa else ''
-            run_name = f'{args.model}_{args.dataset}_{args.optimizer}_{args.epochs}epochs{swa_suffix}'
-            
+            run_name = f'{args.model}_{args.dataset}_{optimizer_name}_{args.epochs}epochs{swa_suffix}'
+
             wandb.init(
                 project=args.wandb_project,
                 entity=args.wandb_entity,
                 name=run_name,
                 config=vars(args)
             )
-    
-    # Setup directories
-    Path(args.data_dir).mkdir(parents=True, exist_ok=True)
-    Path(args.results_dir).mkdir(parents=True, exist_ok=True)
-    
-    # Setup device
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f'Using device: {device}')
-    
-    # Load dataset
-    print(f'Loading {args.dataset}...')
-    train_loader, test_loader, num_classes = get_dataset(args)
-    
-    # Initialize model
-    print(f'Initializing {args.model}...')
-    model = get_model(args, num_classes).to(device)
-    
-    # Initialize optimizer
-    optimizer = get_optimizer(args, model)
-    
-    # Learning rate scheduler (cosine annealing)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
-    
-    # Initialize SWA if requested
-    swa_model = None
-    swa_scheduler = None
-    if args.use_swa:
-        swa_model = AveragedModel(model)
-        swa_scheduler = SWALR(optimizer, swa_lr=args.swa_lr)
-        print(f'SWA will start at epoch {args.swa_start}')
-    
-    criterion = nn.CrossEntropyLoss()
-    
-    # Generate unique filenames with timestamp and optimizer
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    swa_suffix = '_SWA' if args.use_swa else ''
-    base_filename = f'{args.model}_{args.dataset}_{args.optimizer}_{args.epochs}epochs{swa_suffix}_{timestamp}'
-    log_file = os.path.join(args.results_dir, f'{base_filename}_training_log.csv')
-    
+
     # Print training summary
     print('\n' + '='*80)
     print('TRAINING CONFIGURATION')
     print('='*80)
     print(f'Model: {args.model}')
     print(f'Dataset: {args.dataset} ({num_classes} classes)')
-    print(f'Optimizer: {args.optimizer}')
+    print(f'Optimizer: {optimizer_name}')
     print(f'Epochs: {args.epochs}')
     print(f'Initial LR: {args.lr_init}')
     print(f'Weight Decay: {args.wd}')
@@ -314,34 +362,34 @@ def main():
     print(f'Results Directory: {args.results_dir}')
     print(f'Log File: {base_filename}_training_log.csv')
     print('='*80 + '\n')
-    
+
     # Training loop
     results = []
-    
+
     print('\nStarting training...\n')
-    
+
     for epoch in range(1, args.epochs + 1):
         epoch_start = time.time()
-        
+
         # Train
         train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, device)
-        
+
         # Update learning rate
         if args.use_swa and epoch > args.swa_start:
             swa_model.update_parameters(model)
             swa_scheduler.step()
         else:
             scheduler.step()
-        
+
         epoch_time = time.time() - epoch_start
-        
+
         # Prepare result row
         result_row = {
             'epoch': epoch,
             'train_loss': f'{train_loss:.4f}',
             'train_acc': f'{train_acc:.2f}%',
         }
-        
+
         # Evaluate SWA model if applicable
         if args.use_swa and epoch >= args.swa_start:
             swa_loss, swa_acc = evaluate(swa_model, train_loader, criterion, device)
@@ -350,13 +398,13 @@ def main():
         else:
             result_row['swa_train_loss'] = '-'
             result_row['swa_train_acc'] = '-'
-        
+
         # Evaluate on test set
         if epoch == 1 or epoch == args.epochs or epoch % args.eval_freq == 0:
             test_loss, test_acc = evaluate(model, test_loader, criterion, device)
             result_row['test_loss'] = f'{test_loss:.4f}'
             result_row['test_acc'] = f'{test_acc:.2f}%'
-            
+
             # Evaluate SWA on test set
             if args.use_swa and epoch >= args.swa_start:
                 swa_test_loss, swa_test_acc = evaluate(swa_model, test_loader, criterion, device)
@@ -370,10 +418,10 @@ def main():
             result_row['test_acc'] = '-'
             result_row['swa_test_loss'] = '-'
             result_row['swa_test_acc'] = '-'
-        
+
         result_row['time'] = f'{epoch_time:.2f}s'
         results.append(result_row)
-        
+
         # Log to wandb if enabled
         if args.use_wandb:
             log_dict = {
@@ -383,21 +431,21 @@ def main():
                 'lr': optimizer.param_groups[0]['lr'],
                 'time/epoch': epoch_time
             }
-            
+
             if args.use_swa and epoch >= args.swa_start:
                 log_dict['swa_train/loss'] = swa_loss
                 log_dict['swa_train/acc'] = swa_acc
-            
+
             if epoch == 1 or epoch == args.epochs or epoch % args.eval_freq == 0:
                 log_dict['test/loss'] = test_loss
                 log_dict['test/acc'] = test_acc
-                
+
                 if args.use_swa and epoch >= args.swa_start:
                     log_dict['swa_test/loss'] = swa_test_loss
                     log_dict['swa_test/acc'] = swa_test_acc
-            
+
             wandb.log(log_dict, step=epoch)
-        
+
         # Print table - only show header every 40 epochs
         table = tabulate([result_row], headers='keys', tablefmt='simple', floatfmt='8.4f')
         if epoch % 40 == 1:  # Show header on first epoch and every 40 epochs
@@ -406,30 +454,30 @@ def main():
         else:
             table = table.split('\n')[2]
         print(table)
-        
+
         # Save to CSV file
         with open(log_file, 'w', newline='') as f:
             if results:
                 writer = csv.DictWriter(f, fieldnames=results[0].keys())
                 writer.writeheader()
                 writer.writerows(results)
-    
+
     # Update batch normalization statistics for SWA model
     if args.use_swa:
         print('\nUpdating SWA batch normalization statistics...')
         torch.optim.swa_utils.update_bn(train_loader, swa_model, device=device)
-        
+
         # Final SWA evaluation
         swa_test_loss, swa_test_acc = evaluate(swa_model, test_loader, criterion, device)
         print(f'Final SWA Test Loss: {swa_test_loss:.4f}, Test Acc: {swa_test_acc:.2f}%')
-        
+
         # Log final SWA results to wandb
         if args.use_wandb:
             wandb.log({
                 'swa_final/test_loss': swa_test_loss,
                 'swa_final/test_acc': swa_test_acc
             })
-        
+
         # Append final SWA results to CSV
         final_swa_row = {
             'epoch': 'SWA_final',
@@ -444,26 +492,26 @@ def main():
             'time': '-'
         }
         results.append(final_swa_row)
-        
+
         # Update CSV with final SWA results
         with open(log_file, 'w', newline='') as f:
             if results:
                 writer = csv.DictWriter(f, fieldnames=results[0].keys())
                 writer.writeheader()
                 writer.writerows(results)
-    
+
     # Save final models
     if args.save_model:
         print('\nSaving models...')
         model_file = os.path.join(args.results_dir, f'{base_filename}_final_model.pth')
         torch.save(model.state_dict(), model_file)
         print(f'Saved model to: {model_file}')
-        
+
         if args.use_swa:
             swa_model_file = os.path.join(args.results_dir, f'{base_filename}_swa_model.pth')
             torch.save(swa_model.state_dict(), swa_model_file)
             print(f'Saved SWA model to: {swa_model_file}')
-            
+
         # Log model artifacts to wandb
         if args.use_wandb:
             wandb.save(model_file)
@@ -471,11 +519,11 @@ def main():
                 wandb.save(swa_model_file)
     else:
         print('\nSkipping model saving (--save_model not specified)')
-    
+
     # Finish wandb run
     if args.use_wandb:
         wandb.finish()
-    
+
     print(f'\nTraining complete! Results saved to {args.results_dir}')
 
 
