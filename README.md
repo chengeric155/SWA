@@ -13,6 +13,13 @@ pip install torch torchvision pytorch_optimizer tabulate tdqm
 pip install wandb
 ```
 
+or 
+
+```bash
+conda env create -f environment.yml
+conda activate swa
+```
+
 ## Usage
 
 The general way of using the script follows this format:

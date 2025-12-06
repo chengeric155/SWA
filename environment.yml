@@ -1,4 +1,4 @@
-name: capstone
+name: swa
 channels:
   - pytorch
   - nvidia
